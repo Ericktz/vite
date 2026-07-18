@@ -1,3 +1,4 @@
+import traceback
 import argparse
 import requests
 import json
@@ -30,9 +31,13 @@ if toDate != None:
 if fromDate != None and toDate != None:
     if toDate < fromDate:
         sys.exit('  ###> toDate must be equal or greater than fromDate')
-    
+
+if fromDate != None and toDate == None:
+    toDate = datetime.today().timestamp()#strftime('%Y-%m-%d')
+
 filterToken = [] # ['VITE', 'BAN']
 filterTime = [fromDate, toDate]
+print(filterTime)
 
 if nodeIP == None:
     sys.exit('  ###> You have to enter an IP of a VITE node.')
@@ -44,8 +49,8 @@ print(nodeDetails)
 if viteAddress == None:
     sys.exit('  ###> You have to enter a VITE address with parameter --vaddr')
 
-transactionsPerRequest = 300
-pageMax = 20
+transactionsPerRequest = 1000
+pageMax = 2000
 
 path = os.path.dirname(os.path.abspath(__file__))
 fileName = 'VITE_transactions.json'
@@ -108,41 +113,76 @@ def requestNodeData():
             body = getBody(viteAddress, page, transactionsPerRequest)
             try:
                 response = requests.post(url=url, json=body, headers=header)
-            
+
                 if response.status_code == 200:
                     resp = response.json()
-                    if resp['result'] == None:
+
+                    if resp['result'] is None:
                         print('Last requested page has no transaction results.')
                         endPage = False
                         break
                     for result in resp['result']:
-                        if result['tokenInfo']['tokenSymbol'] not in filterToken:
-                            if (filterTime[0] == None and filterTime[1] == None) or (int(filterTime[0]) <= result['timestamp'] and result['timestamp'] <= int(filterTime[1])):
-                                toAddress = result['toAddress']
-                                if toAddress == viteAddress:
-                                    transactionType = 'Recieved'
+                        # if result['fromAddress'] == 'vite_0bf792dfebdfe2bdb4037cff651718903c22e67fbf037ac691' :
+                        #     print(result)
+                        if result['blockType'] == 4 and result['sendBlockList'] != None:#reviso las txs del tipo receive
+                            for send_block in result.get('sendBlockList', []):
+                                # Compruebo cuántos VITE fueron retirados del consenso
+                                if (float(send_block.get('amount')) > 0
+                                    and send_block.get('fromAddress') in viteAddress
+                                ):
+                                    transactionType = 'Sent'
+                                    transactionMultiplier = -1
+                                    amount = int(send_block['amount'])
+                                    decimals = int(tokenInfo['decimals'])
+                                    decimalAmount = (amount / 10**decimals) * transactionMultiplier
+                                    print(decimalAmount)
+                                    dtobj = datetime.fromtimestamp(result['timestamp'], timezone.utc)
+
+                                    transaction = {
+                                        'fromAddress': send_block['fromAddress'],
+                                        'toAddress': send_block['toAddress'],
+                                        'transactionType': transactionType,
+                                        'hash': send_block['hash'],
+                                        'decimalAmount': decimalAmount,
+                                        'amount': str(amount),
+                                        'decimals': decimals,
+                                        'fee': result['fee'],
+                                        'tokenName': tokenInfo['tokenName'],
+                                        'tokenSymbol': tokenInfo['tokenSymbol'],
+                                        'datetime': result['timestamp']  # dtobj,
+                                        # 'dt': dtobj.strftime("%d/%m/%Y %H:%M:%S.%f")[:-3]
+                                    }
+
+                                    transactions.append(transaction)
+                        tokenInfo = result.get('tokenInfo')
+                        if tokenInfo and tokenInfo.get('tokenSymbol') not in filterToken and int(result['amount']) > 0:
+                            if (filterTime[0] is None and filterTime[1] is None) or (int(filterTime[0]) <= result['timestamp'] and result['timestamp'] <= int(filterTime[1])):
+                                if result['toAddress'] == viteAddress:
+                                    transactionType = 'Received'
                                     transactionMultiplier = 1
-                                else:
+                                if result['fromAddress'] == viteAddress:
                                     transactionType = 'Sent'
                                     transactionMultiplier = -1
 
                                 amount = int(result['amount'])
-                                decimals = int(result['tokenInfo']['decimals'])
+                                decimals = int(tokenInfo['decimals'])
                                 decimalAmount = (amount / 10**decimals) * transactionMultiplier
-                                dtobj = datetime.fromtimestamp(result['timestamp'], timezone.utc) 
+                                print(decimalAmount)
+                                dtobj = datetime.fromtimestamp(result['timestamp'], timezone.utc)
 
                                 transaction = {
                                     'fromAddress': result['fromAddress'],
-                                    'toAddress': toAddress,
+                                    'toAddress': result['toAddress'],
                                     'transactionType': transactionType,
+                                    'hash': result['hash'],
                                     'decimalAmount': decimalAmount,
                                     'amount': str(amount),
                                     'decimals': decimals,
                                     'fee': result['fee'],
-                                    'tokenName': result['tokenInfo']['tokenName'],
-                                    'tokenSymbol': result['tokenInfo']['tokenSymbol'],
-                                    'datetime': result['timestamp'] #, #dtobj,
-                                    #'dt': dtobj.strftime("%d/%m/%Y %H:%M:%S.%f")[:-3]
+                                    'tokenName': tokenInfo['tokenName'],
+                                    'tokenSymbol': tokenInfo['tokenSymbol'],
+                                    'datetime': result['timestamp']  # dtobj,
+                                    # 'dt': dtobj.strftime("%d/%m/%Y %H:%M:%S.%f")[:-3]
                                 }
 
                                 transactions.append(transaction)
@@ -150,11 +190,13 @@ def requestNodeData():
                     print(response.status_code)
                     endPage = False
                     break
-            except:
-                sys.exit('  ###> Exception during request.')
+            except Exception as e:
+                print('###> Exception during request:')
+                traceback.print_exc()
+                # sys.exit(1)
+                time.sleep(2)
 
             page = page + 1
-            print('Downloaded page ' + str(page))
    
         if len(transactions) > 0:
             statusJSON = writeJSON(fileName,transactions)

@@ -1,0 +1,14 @@
+
+# Datos locales generados por los analizadores Vite
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.log
+*.log.*
+__pycache__/
+*.py[cod]
+
+# Exportaciones generadas por TransactionsByAddress
+003_TransactionsByAddress/VITE_transactions.json
+003_TransactionsByAddress/VITE_transactions.json.csv
